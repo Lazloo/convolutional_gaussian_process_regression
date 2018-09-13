@@ -12,16 +12,16 @@ class GPR_Class:
 
     @staticmethod
     def normalize(x: List[float], min_in: float, max_in: float, min_out: float, max_out: float) -> list:
-        x_norm = (x - min_in) / (max_in - min_in) * (max_out - min_out) + min_out
+        x_norm = ((x - min_in) / (max_in - min_in) * (max_out - min_out) + min_out)
         return x_norm
 
     def create_GPR_model(self, X, Y):
-        self.x_min = min(X)
-        self.x_max = max(X)
-        self.y_min = min(Y)
-        self.y_max = max(Y)
-        assert self.y_min < self.y_max, 'y_min should be smaller than y_max'
-        assert self.x_min < self.x_max, 'x_min should be smaller than x_max'
+        self.x_min = np.amin(X, axis=0)
+        self.x_max = np.amax(X, axis=0)
+        self.y_min = np.amin(Y, axis=0)
+        self.y_max = np.amax(Y, axis=0)
+        assert np.min(self.y_min) < np.max(self.y_max), 'y_min should be smaller than y_max'
+        assert np.min(self.x_min) < np.max(self.x_max), 'x_min should be smaller than x_max'
 
         self.X = X
         self.Y = Y
@@ -37,7 +37,7 @@ class GPR_Class:
         x_interpolation = self.normalize(x_test,
                                          min_in=self.x_min, max_in=self.x_max,
                                          min_out=0, max_out=1)
-        y_mean_interpol, y_cov_norm = self.gp.predict(x_interpolation[:, np.newaxis], return_cov=True)
+        y_mean_interpol, y_cov_norm = self.gp.predict(x_interpolation[np.newaxis, :], return_cov=True)
 
         y_mean = self.normalize(y_mean_interpol,
                                 min_in=0, max_in=1,
