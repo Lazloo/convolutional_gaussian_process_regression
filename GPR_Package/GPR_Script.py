@@ -1,14 +1,21 @@
+from sklearn.feature_extraction import image
 from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, Matern
 from typing import List
+from PIL import Image
+import os
 
 
 class GPR_Class:
 
     def __init__(self):
         self.data = []
+        self.x_min = []
+        self.x_max = []
+        self.y_min = []
+        self.y_max = []
 
     @staticmethod
     def normalize(x: List[float], min_in: float, max_in: float, min_out: float, max_out: float) -> list:
@@ -54,7 +61,6 @@ class GPR_Class:
         # Rescale and perform GPR prediction
         y_mean, y_cov = self.predict(x_interpolation)
 
-
         plt.figure()
         plt.plot(x_interpolation, y_mean, 'k', lw=3, zorder=9)
         plt.fill_between(x_interpolation, (y_mean - np.sqrt(np.diag(y_cov))).transpose(),
@@ -65,3 +71,59 @@ class GPR_Class:
         plt.tight_layout()
         plt.show()
 
+    @staticmethod
+    def read_label(filename, label_choices, output_type: str='binary'):
+        basename = os.path.basename(filename)
+        labels: bytes = basename.split('_')[0]
+
+        indices = [label_choices.index(l) for l in labels]
+        if output_type == 'binary':
+            data = [[0 for i in range(len(label_choices))] for j in range(len(labels))]
+            for iL in range(0, len(labels)):
+                data[iL][indices[iL]] = 1
+        else:
+            data = indices
+
+        return data
+
+    def read_labels(self, dir_name, ext='.png', label_choices='0', output_type: str='binary'):
+        fd = [os.path.join(dir_name, fn) for fn in os.listdir(dir_name) if fn.endswith(ext)]
+        label_array = np.array([self.read_label(ifd, label_choices, output_type) for ifd in fd])
+        n_examples = label_array.shape[0]
+        n_labels = label_array.shape[1]
+        if output_type == 'binary':
+            n_label_choices = label_array.shape[2]
+        else:
+            n_label_choices = 1
+        label_array = label_array.reshape([n_examples, n_label_choices * n_labels])
+
+        return label_array
+
+    @staticmethod
+    def read_images(dir_name, ext='.png', is_single_image=False):
+        if is_single_image:
+            im_raw = [Image.open(dir_name).convert('L')]
+        else:
+            fd = [os.path.join(dir_name, fn) for fn in os.listdir(dir_name) if fn.endswith(ext)]
+            im_raw = [Image.open(iFile).convert('L') for iFile in fd]
+        image_data = [np.asarray(i) for i in im_raw]
+        image_data = [i / 255 for i in image_data]
+        # binary_image_array = [(iData > 125.5) * 1.0 for iData in image_data]
+        # image_data/255
+        return image_data
+
+    @staticmethod
+    def generate_patch_aggregation(images_array, scaling_factor=[2, 2]):
+        features_list = \
+            [
+                [
+                    np.sum(iPatch)
+                    for iPatch
+                    in image.extract_patches_2d(image=iImage,
+                                                patch_size=(round(iImage.shape[0] / scaling_factor[0]),
+                                                            round(iImage.shape[1] / scaling_factor[1])))
+                ]
+                for iImage in images_array
+            ]
+
+        return np.array(features_list)
