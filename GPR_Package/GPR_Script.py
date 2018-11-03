@@ -3,11 +3,12 @@ from matplotlib import pyplot as plt
 import logging
 import gpflow
 import time as time
+import itertools
 import sys
 import numpy as np
 from operator import itemgetter
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel, Matern
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel, Matern, Exponentiation
 import scipy as scipy
 import skimage.measure as measure
 from typing import List
@@ -64,6 +65,7 @@ class GPR_Class:
         self.x_max = np.amax(X, axis=0)
         self.y_min = np.amin(Y, axis=0)
         self.y_max = np.amax(Y, axis=0)
+
         assert np.min(self.y_min) < np.max(self.y_max), 'y_min should be smaller than y_max'
 
         for i in range(len(self.x_min)):
@@ -93,7 +95,9 @@ class GPR_Class:
         if self.verbose_debug:
             print('normalizing Y took : ' + str(t2 - t1) + 's')
 
-        kernel = 1.0 * Matern(length_scale=0.1, length_scale_bounds=(1e-5, 1e5), nu=2.5) + WhiteKernel()
+        kernel = 1.0 * Matern(length_scale=0.1, length_scale_bounds=(1e-5, 1e5), nu=2.5) \
+                 + WhiteKernel()
+        # kernel = 1.0 * RBF()
         t1 = time.time()
         if self.gp_package == 'sklearn':
             self.gp = GaussianProcessRegressor(kernel=kernel, alpha=0.0).fit(x_norm, y_norm)
@@ -141,7 +145,10 @@ class GPR_Class:
             y_mean[i] = self.normalize(y_mean[i],
                                        min_in=0, max_in=1,
                                        min_out=self.y_min, max_out=self.y_max)
-            y_std[i] = y_std_norm[i] * ((max(self.y_max) - min(self.y_min)) ** 2)
+            if isinstance(self.y_max, np.float):
+                y_std[i] = y_std_norm[i] * ((self.y_max - self.y_min) ** 2)
+            else:
+                y_std[i] = y_std_norm[i] * ((max(self.y_max) - min(self.y_min)) ** 2)
 
         return y_mean, y_std
 
@@ -300,29 +307,48 @@ class GPR_Class:
         self.label_array_eval = itemgetter(*self.evaluation_indices)(self.label_array)
 
     def generate_test_train_eval_data(self,
-                                      windows_size: tuple,
-                                      weights: np.array = np.array([]),
-                                      weight_shape: list = []):
-        self.features_train = [self.convolution_step_edges_max_pooling(i, windows_size=windows_size,
-                                                                       weights=weights,
-                                                                       weight_shape=weight_shape).flatten()
-                               for i in self.images_array_train]
-        self.features_test = [self.convolution_step_edges_max_pooling(i, windows_size=windows_size,
-                                                                      weights=weights,
-                                                                      weight_shape=weight_shape).flatten()
-                              for i in self.images_array_test]
-        self.features_eval = [self.convolution_step_edges_max_pooling(i, windows_size=windows_size,
-                                                                      weights=weights,
-                                                                      weight_shape=weight_shape).flatten()
-                              for i in self.images_array_eval]
+                                      windows_size: list,
+                                      weights: np.ndarray = np.ndarray([]),
+                                      weight_shape: list = [[]]):
+
+        def generate_data(data_set_type: str = 'train'):
+            if data_set_type == 'train':
+                data_set = self.images_array_train
+            elif data_set_type == 'test':
+                data_set = self.images_array_test
+            elif data_set_type == 'eval':
+                data_set = self.images_array_eval
+            else:
+                raise ValueError('Unknown data_set_type: ' + data_set_type)
+
+            data_out = np.array(
+                [list(itertools.chain(*[self.convolution_step_edges_max_pooling(i, windows_size=windows_size[iW],
+                                                                    weights=weights[iW],
+                                                                    weight_shape=weight_shape[
+                                                                        iW]).flatten().tolist()
+                            for iW in range(len(windows_size))]))
+                 for i in data_set])
+            # try:
+            #     data_out = data_out.reshape(data_out.shape[0:2])
+            # except:
+            #     pass
+
+            return data_out
+
+        self.features_train = generate_data('train')
+        self.features_test = generate_data('test')
+        self.features_eval = generate_data('eval')
 
     def train_and_test(self,
-                       windows_size: tuple,
+                       windows_size: list,
                        weights=np.array([]),
                        weight_shape: list = []):
 
+        assert len(weights.shape) == 2, 'weights need to be a 2d-Array'
+        assert type(weight_shape) == list, 'weight_shape need to be a list'
+
         # reset to integer
-        windows_size = tuple([int(round(i)) for i in windows_size])
+        windows_size = [tuple([int(round(i)) for i in iW]) for iW in windows_size]
 
         t1 = time.time()
         self.generate_test_train_eval_data(windows_size=windows_size, weights=weights, weight_shape=weight_shape)
