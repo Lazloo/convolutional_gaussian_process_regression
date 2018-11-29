@@ -1,5 +1,5 @@
 from sklearn.feature_extraction import image
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 import logging
 import gpflow
 import time as time
@@ -152,23 +152,23 @@ class GPR_Class:
 
         return y_mean, y_std
 
-    def plot_1D_interpolation(self):
-        x_test = np.linspace(0, 1, 1000)
-        x_interpolation = self.normalize(x_test,
-                                         min_in=0, max_in=1,
-                                         min_out=self.x_min, max_out=self.x_max)
-        # Rescale and perform GPR prediction
-        y_mean, y_cov = self.predict(x_interpolation)
-
-        plt.figure()
-        plt.plot(x_interpolation, y_mean, 'k', lw=3, zorder=9)
-        plt.fill_between(x_interpolation, (y_mean - np.sqrt(np.diag(y_cov))).transpose(),
-                         (y_mean + np.sqrt(np.diag(y_cov))).transpose(),
-                         alpha=0.5, color='k')
-        plt.scatter(self.X[:, 0], self.Y,
-                    c='r', s=1, zorder=10, edgecolors=(0, 0, 0))
-        plt.tight_layout()
-        plt.show()
+    # def plot_1D_interpolation(self):
+    #     x_test = np.linspace(0, 1, 1000)
+    #     x_interpolation = self.normalize(x_test,
+    #                                      min_in=0, max_in=1,
+    #                                      min_out=self.x_min, max_out=self.x_max)
+    #     # Rescale and perform GPR prediction
+    #     y_mean, y_cov = self.predict(x_interpolation)
+    #
+    #     plt.figure()
+    #     plt.plot(x_interpolation, y_mean, 'k', lw=3, zorder=9)
+    #     plt.fill_between(x_interpolation, (y_mean - np.sqrt(np.diag(y_cov))).transpose(),
+    #                      (y_mean + np.sqrt(np.diag(y_cov))).transpose(),
+    #                      alpha=0.5, color='k')
+    #     plt.scatter(self.X[:, 0], self.Y,
+    #                 c='r', s=1, zorder=10, edgecolors=(0, 0, 0))
+    #     plt.tight_layout()
+    #     plt.show()
 
     @staticmethod
     def read_label(filename, label_choices, output_type: str = 'binary'):
