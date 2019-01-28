@@ -27,10 +27,10 @@ class Bayesian_Optimization(GPR_Script.GPR_Class):
     def calculated_expected_improvement(self, x, y_max):
         n_samples = len(self.y_list)
         n_test_points = len(x)
+        n_var = x.shape[1]
         # n_iterations = round(n_samples*n_test_points/(1E5*10))
-        n_iterations = round(n_samples*n_test_points/1E6/10)
+        n_iterations = round(n_var*n_samples*n_test_points/1E6/10)
 
-        # Todo: Sample in iterations
         mean_y_iter = [None]*n_iterations
         std_y_iter = [None]*n_iterations
         for i in range(n_iterations):
@@ -87,6 +87,7 @@ class Bayesian_Optimization(GPR_Script.GPR_Class):
             t2 = time.time()
             t_delta = t2 - t1
             output_print(i_random_number, t_delta, self.y_list[i_random_number], self.x_list[i_random_number])
+            self.save_model('intermediate')
 
         self.logger.info('Start: Sequential Iteration')
         for i_iteration in range(n_iteration):
@@ -103,6 +104,7 @@ class Bayesian_Optimization(GPR_Script.GPR_Class):
             t_delta = t2 - t1
 
             output_print(i_iteration, t_delta, y, x)
+            self.save_model('intermediate')
 
     def save_model(self, file_template: str = 'bo'):
         with open(file_template + '_x_list.pickle', 'wb') as file_pi:

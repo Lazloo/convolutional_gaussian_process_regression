@@ -14,7 +14,9 @@ import skimage.measure as measure
 from typing import List
 from PIL import Image
 import os
-
+import torch
+import gpytorch
+import gp_torch.gp_torch as gp_torch
 
 class GPR_Class:
 
@@ -23,8 +25,8 @@ class GPR_Class:
         self.logger = logging.getLogger('GPR Classfication')
         self.gp_package = 'sklearn'
 
-        self.verbose = True
-        self.verbose_debug = True
+        self.verbose = False
+        self.verbose_debug = False
 
         self.gp = GaussianProcessRegressor()
 
@@ -111,6 +113,21 @@ class GPR_Class:
             self.gp.compile()
             opt = gpflow.train.ScipyOptimizer()
             opt.minimize(self.gp)
+        elif self.gp_package == 'gpytorch':
+            num_tasks=len(y_norm[0])
+            likelihood = gpytorch.likelihoods.GaussianLikelihood(num_tasks=num_tasks).cuda()
+            train_x = torch.tensor(x_norm)
+            # Add Extra dimension at position zero that represents the different inputs
+            train_x = train_x.unsqueeze(0).repeat(num_tasks, 1, 1)
+
+            train_x_cuda = train_x.cuda()
+            train_y_cuda = torch.tensor(y_norm).transpose(-2, -1).cuda()
+            self.gp = gp_torch.gp_torch(train_x=train_x_cuda, train_y=train_y_cuda, likelihood=likelihood,
+                                        verbose=self.verbose,
+                                        kernel='Matern_2_5').cuda()
+            self.gp.double()
+            self.gp.train_gp_model(train_x=train_x_cuda, train_y=train_y_cuda)
+
         else:
             raise AssertionError('unknown GP Method: ' + self.gp_package)
         t2 = time.time()
@@ -136,6 +153,9 @@ class GPR_Class:
         elif self.gp_package == 'gp_flow':
             y_mean_interpol, y_var_norm = self.gp.predict_y(x_interpolation)
             y_std_norm = y_var_norm ** 0.5
+        elif self.gp_package == 'gpytorch':
+            x_interpolation_cuda = torch.tensor(x_interpolation).cuda()
+            y_mean_interpol, y_std_norm = self.gp.make_prediction(x_interpolation_cuda)
         else:
             raise AssertionError('unknown GP Method: ' + self.gp_package)
 
