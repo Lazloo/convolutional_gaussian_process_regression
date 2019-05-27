@@ -16,7 +16,8 @@ from PIL import Image
 import os
 import torch
 import gpytorch
-import gp_torch.gp_torch as gp_torch
+import gp_torch_sgpr.gp_torch_sgpr as gp_torch_sgpr
+
 
 class GPR_Class:
 
@@ -56,6 +57,9 @@ class GPR_Class:
         self.features_train = np.array([])
         self.features_test = np.array([])
         self.features_eval = np.array([])
+
+        # Number of inducing point for gyptorch SGPR
+        self.n_inducing_points = 100
 
     @staticmethod
     def normalize(x: List[float], min_in: float, max_in: float, min_out: float, max_out: float) -> list:
@@ -114,19 +118,26 @@ class GPR_Class:
             opt = gpflow.train.ScipyOptimizer()
             opt.minimize(self.gp)
         elif self.gp_package == 'gpytorch':
-            num_tasks=len(y_norm[0])
+            num_tasks = len(y_norm[0])
             likelihood = gpytorch.likelihoods.GaussianLikelihood(num_tasks=num_tasks).cuda()
             train_x = torch.tensor(x_norm)
             # Add Extra dimension at position zero that represents the different inputs
             train_x = train_x.unsqueeze(0).repeat(num_tasks, 1, 1)
 
             train_x_cuda = train_x.cuda()
-            train_y_cuda = torch.tensor(y_norm).transpose(-2, -1).cuda()
-            self.gp = gp_torch.gp_torch(train_x=train_x_cuda, train_y=train_y_cuda, likelihood=likelihood,
-                                        verbose=self.verbose,
-                                        kernel='Matern_2_5').cuda()
-            self.gp.double()
-            self.gp.train_gp_model(train_x=train_x_cuda, train_y=train_y_cuda)
+            train_y_cuda = torch.tensor(y_norm).transpose(dim0=-2, dim1=-1).cuda()
+
+            self.gp = gp_torch_sgpr.gp_torch_sgpr(
+                train_x=train_x_cuda,
+                train_y=train_y_cuda,
+                likelihood=likelihood,
+                verbose=self.verbose,
+                kernel='Matern_1_5',
+                n_inducing_points=self.n_inducing_points
+            ).cuda()
+            self.gp.float()
+            # self.gp.train_gp_model(train_x=train_x_cuda, train_y=train_y_cuda)
+            self.gp.train_gp_model_adam(train_x=train_x_cuda, train_y=train_y_cuda)
 
         else:
             raise AssertionError('unknown GP Method: ' + self.gp_package)
@@ -136,9 +147,9 @@ class GPR_Class:
 
         return self.gp
 
-    def predict(self, x_test):
+    def predict(self, x_test, do_normlization: bool = False):
 
-        x_interpolation = x_test
+        x_interpolation = x_test.copy()
         if len(x_test.shape) == 1:
             x_interpolation = x_interpolation[np.newaxis, :]
 
@@ -343,10 +354,10 @@ class GPR_Class:
 
             data_out = np.array(
                 [list(itertools.chain(*[self.convolution_step_edges_max_pooling(i, windows_size=windows_size[iW],
-                                                                    weights=weights[iW],
-                                                                    weight_shape=weight_shape[
-                                                                        iW]).flatten().tolist()
-                            for iW in range(len(windows_size))]))
+                                                                                weights=weights[iW],
+                                                                                weight_shape=weight_shape[
+                                                                                    iW]).flatten().tolist()
+                                        for iW in range(len(windows_size))]))
                  for i in data_set])
             # try:
             #     data_out = data_out.reshape(data_out.shape[0:2])
@@ -375,7 +386,7 @@ class GPR_Class:
         t2 = time.time()
         if self.verbose_debug:
             print('generating data took : ' + str(t2 - t1) + 's')
-        print('windows_size: ' + str(windows_size) + '- weights: ', weights)
+        # print('windows_size: ' + str(windows_size) + '- weights: ', weights)
 
         t1 = time.time()
         self.create_GPR_model(

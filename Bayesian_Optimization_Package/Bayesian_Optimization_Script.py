@@ -1,4 +1,5 @@
 import GPR_Package.GPR_Script as GPR_Script
+import torch
 import operator as op
 from scipy.stats import norm
 import pickle
@@ -7,6 +8,7 @@ import numpy as np
 import functools
 from tqdm import tqdm
 import time as time
+import sys
 
 class Bayesian_Optimization(GPR_Script.GPR_Class):
     x_list = []
@@ -29,7 +31,7 @@ class Bayesian_Optimization(GPR_Script.GPR_Class):
         n_test_points = len(x)
         n_var = x.shape[1]
         # n_iterations = round(n_samples*n_test_points/(1E5*10))
-        n_iterations = round(n_var*n_samples*n_test_points/1E6/10)
+        n_iterations = round(n_var*n_samples*n_test_points/1E4/10)
 
         mean_y_iter = [None]*n_iterations
         std_y_iter = [None]*n_iterations
@@ -70,33 +72,53 @@ class Bayesian_Optimization(GPR_Script.GPR_Class):
 
         return para_opt
 
-    def do_optimization(self, n_random: int, n_iteration: int):
+    def do_optimization(self, n_random: int, n_iteration: int, continue_flag=False):
 
         def output_print(i, t_delta, y, x):
             self.logger.info('Iteration: {} - Time: {} - Output: {} - Parameter: {}'.format(i, t_delta, y, x))
 
         self.x_list = [None] * (n_random + n_iteration)
         self.y_list = [None] * (n_random + n_iteration)
+
+        if continue_flag:
+            self.load_model('intermediate')
+            x_list = [i for i in self.x_list if i is not None]
+            n_entries = len(x_list)
+            if n_entries >= n_random:
+                i_start_rand = n_random
+                i_start_iter = n_entries - n_random
+            else:
+                i_start_rand = n_entries
+                i_start_iter = 0
+        else:
+            i_start_rand = 0
+            i_start_iter = 0
         random_number = np.random.uniform(self.lower_bound, self.upper_bound, [n_random, len(self.upper_bound)])
 
         self.logger.info('Start: Random Initialization')
-        for i_random_number in range(n_random):
+        for i_random_number in range(i_start_rand, n_random):
             t1 = time.time()
             self.x_list[i_random_number] = random_number[i_random_number]
+            # try:
             self.y_list[i_random_number] = self.objective_function(random_number[i_random_number])
+            # except:
+            #     self.logger.error(sys.exc_info()[1])
+            #     self.y_list[i_random_number] = 0
+            # torch.cuda.empty_cache()
             t2 = time.time()
             t_delta = t2 - t1
             output_print(i_random_number, t_delta, self.y_list[i_random_number], self.x_list[i_random_number])
             self.save_model('intermediate')
 
         self.logger.info('Start: Sequential Iteration')
-        for i_iteration in range(n_iteration):
+        for i_iteration in range(i_start_iter, n_iteration):
             t1 = time.time()
 
             self.create_GPR_model(self.x_list[0:(n_random + i_iteration)], self.y_list[0:(n_random + i_iteration)])
             x = self.random_choice_max_ei()
             y = self.objective_function(x)
-
+            # torch.cuda.empty_cache()
+            
             self.x_list[n_random + i_iteration] = x
             self.y_list[n_random + i_iteration] = y
 

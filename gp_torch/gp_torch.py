@@ -1,5 +1,6 @@
 from loguru import logger
 from LBFGS import FullBatchLBFGS
+from torch.utils.data import TensorDataset, DataLoader
 import itertools
 import operator
 from functools import reduce
@@ -23,11 +24,12 @@ class WeightClipper(object):
 
 
 # We will use the simplest form of GP model, exact inference
-class gp_torch(gpytorch.models.ExactGP):
+class gp_torch(gpytorch.models.AbstractVariationalGP):
+    # class gp_torch(gpytorch.models.ExactGP):
 
     def __init__(self, train_x, train_y, likelihood, verbose=False, kernel='Matern_2_5'):
-        super(gp_torch, self).__init__(train_x, train_y, likelihood)
-        self.likelihood = likelihood
+        # super(gp_torch, self).__init__(train_x, train_y, likelihood)
+
         if len(train_y.shape) == 1:
             num_tasks = 1
         else:
@@ -36,25 +38,22 @@ class gp_torch(gpytorch.models.ExactGP):
         if len(train_x.shape) == 1:
             num_dims = 1
         else:
-            num_dims = train_x.shape[1]
+            num_dims = train_x.shape[-1]
 
-        # self.mean_module = gpytorch.means.MultitaskMean(
-        #     gpytorch.means.ConstantMean(), num_tasks=num_tasks
-        # )
-        # self.covar_module = gpytorch.kernels.MultitaskKernel(
-        #     gpytorch.kernels.MaternKernel(nu=2.5), num_tasks=num_tasks, rank=1
-        # )
+        grid_size = 32
+        grid_bounds = [(-1, 1)] * num_dims
+        grid_size = int(max(min(1E10**(1/num_dims), 32), 3))
+        variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(num_inducing_points=
+                                                                                        grid_size ** 2)
+        variational_strategy = gpytorch.variational.GridInterpolationVariationalStrategy(self,
+                                                                                         grid_size=grid_size,
+                                                                                         grid_bounds=grid_bounds,
+                                                                                         variational_distribution=
+                                                                                         variational_distribution)
+        # super(GPRegressionLayer, self).__init__(variational_strategy)
+        super(gp_torch, self).__init__(variational_strategy)
+        self.likelihood = likelihood
 
-        # SKI requires a grid size hyperparameter. This util can help with that
-        grid_size = gpytorch.utils.grid.choose_grid_size(train_x.transpose(dim0=0, dim1=1))
-        grid_size = len(train_x)
-
-        # self.mean_module = gpytorch.means.MultitaskMean(
-        #     gpytorch.means.ConstantMean(), num_tasks=num_tasks
-        # )
-        self.mean_module = gpytorch.means.ConstantMean()
-
-        # wn_variances = torch.randn((train_x.shape[0],train_x.shape[1],1))
         if kernel == 'Matern_0_5':
             base_kernel = gpytorch.kernels.MaternKernel(nu=0.5)
         elif kernel == 'Matern_1_5':
@@ -71,26 +70,142 @@ class gp_torch(gpytorch.models.ExactGP):
         else:
             raise AssertionError('Unknown kernel type: ' + kernel)
 
+        self.mean_module = gpytorch.means.ConstantMean()
+
+        # grid_size = gpytorch.utils.grid.choose_grid_size(train_x)
+        # self.covar_module = gpytorch.kernels.GridInterpolationKernel(
+        #     gpytorch.kernels.MaternKernel(nu=1.5)
+        #     , grid_size=max(grid_size,100), num_dims=train_x.shape[-1],
+        # )
+
+        grid_size = gpytorch.utils.grid.choose_grid_size(train_x)
+        if grid_size <= 1:
+            logger.warning(
+                'Too less measurements for grid calculation: need at least: ' + str(2 ** num_dims) + 'but got: '
+                + str(train_x.shape[-2]))
+
         self.covar_module = base_kernel
+        # grid_size = gpytorch.utils.grid.choose_grid_size(train_x)
         # self.covar_module = gpytorch.kernels.GridInterpolationKernel(
         #     base_kernel
         #     , grid_size=grid_size, num_dims=num_dims,
         # )
-        # gpytorch.kernels.MultitaskKernel(
-        # , num_tasks=num_tasks, rank=1
-        # )
+
         self.verbose = verbose
 
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
-        # return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-        # return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
     def train_gp_model(self, train_x, train_y):
         # Use full-batch L-BFGS optimizer
-        optimizer = FullBatchLBFGS(self.parameters())
+        # optimizer = FullBatchLBFGS(self.parameters(), lr=1)
+        train_dataset = TensorDataset(train_x, train_y)
+        train_loader = DataLoader(train_dataset, batch_size=int(max(min(train_y.size(0) / 100, 1E4), 100)), shuffle=True)
+        self.train()
+        self.likelihood.train()
+
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam([
+            {'params': self.parameters()},  # Includes GaussianLikelihood parameters
+        ], lr=0.1)
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.VariationalELBO(self.likelihood, self, num_data=train_y.size(0), combine_terms=False).cuda()
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[3, 5], gamma=0.1)
+
+        # define closure
+
+        training_iter = 20
+        num_epochs = 2
+        for i in range(num_epochs):
+            scheduler.step()
+            for minibatch_i, (x_batch, y_batch) in enumerate(train_loader):
+                optimizer.zero_grad()
+                with gpytorch.settings.use_toeplitz(False):
+                    output = self(x_batch.double())
+                    log_lik, kl_div, log_prior = mll(output, y_batch.double())
+                    loss = -(log_lik - kl_div + log_prior).sum()
+
+                # The actual optimization step
+                loss.backward()
+                optimizer.step()
+
+                if self.verbose:
+                    logger.info(
+                        'Iter %d[%d/%d] - Loss: %.3f'
+                        % (i + 1, minibatch_i, len(train_loader), loss.item())
+                    )
+
+    def train_gp_model_LBFGS_SGP(self, train_x, train_y):
+        # Use full-batch L-BFGS optimizer
+        # optimizer = FullBatchLBFGS(self.parameters(), lr=1)
+        train_dataset = TensorDataset(train_x, train_y)
+        train_loader = DataLoader(train_dataset, batch_size=int(max(min(train_y.size(0) / 100, 1E4), 100)), shuffle=True)
+        self.train()
+        self.likelihood.train()
+
+        optimizer = FullBatchLBFGS(self.parameters(), lr=1E-1)
+        # Access aprameters: self.likelihood.noise_covar.raw_noise
+        # self.likelihood.noise_covar.initialize(raw_noise=0.)
+        # self.mean_module.initialize(constant=0.)
+        # para_to_check = self.covar_module.base_kernel
+        # para_to_check.initialize(raw_lengthscale=0.)
+        # self.covar_module.initialize(raw_lengthscale=0.)
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.VariationalELBO(
+            self.likelihood, self, num_data=train_y.size(0), combine_terms=False).cuda()
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[3, 5], gamma=0.1)
+
+        # define closure
+
+        training_iter = 20
+        num_epochs = 2
+        for i in range(num_epochs):
+            scheduler.step()
+            for minibatch_i, (x_batch, y_batch) in enumerate(train_loader):
+                # define closure
+                def closure():
+                    optimizer.zero_grad()
+                    # output = self(train_x.double())
+                    # loss = -mll(output, train_y.double()).sum()
+                    with gpytorch.settings.use_toeplitz(False):
+                        output = self(x_batch.double())
+                        log_lik, kl_div, log_prior = mll(output, y_batch.double())
+                        loss = -(log_lik - kl_div + log_prior).sum()
+
+                    return loss
+
+                loss = closure()
+                loss.backward()
+                # perform step and update curvature
+                # optimizer.zero_grad()
+                options = {'closure': closure, 'current_loss': loss, 'max_ls': 1, 'eta': 2}
+                loss, g_new, lr, _, F_eval, G_eval, desc_dir, fail = optimizer.step(options)
+
+                if self.verbose:
+                    logger.info(
+                        'Iter %d[%d/%d] - Loss: %.3f - LR: %.3f - Func Evals: %0.0f - Grad Evals: %0.0f - fail: %0.0f'
+                        % (i + 1, minibatch_i, len(train_loader), loss.item(), lr, F_eval, G_eval, fail)
+                    )
+                    # logger.info(str(g_new))
+                # if torch.isnan(para_to_check.raw_lengthscale.data):
+                #     # logger.warning('NaN detected')
+                #     # self.covar_module.initialize(raw_lengthscale=1E-6)
+                #     para_to_check.initialize(raw_lengthscale=1E-6)
+
+    def train_gp_model_LBFGS(self, train_x, train_y):
+        # Use full-batch L-BFGS optimizer
+        # optimizer = FullBatchLBFGS(self.parameters(), lr=1)
+        optimizer = FullBatchLBFGS(self.parameters(), lr=1E-1)
+        # Access aprameters: self.likelihood.noise_covar.raw_noise
+        self.likelihood.noise_covar.initialize(raw_noise=0.)
+        self.mean_module.initialize(constant=0.)
+        para_to_check = self.covar_module.base_kernel
+        para_to_check.initialize(raw_lengthscale=0.)
+        # self.covar_module.initialize(raw_lengthscale=0.)
 
         # "Loss" for GPs - the marginal log likelihood
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
@@ -99,44 +214,52 @@ class gp_torch(gpytorch.models.ExactGP):
         # define closure
         def closure():
             optimizer.zero_grad()
-            output = self(train_x)
-            loss = -mll(output, train_y).sum()
+            output = self(train_x.double())
+            loss = -mll(output, train_y.double()).sum()
             return loss
 
         loss = closure()
         loss.backward()
 
-        training_iter = 50
+        training_iter = 20
         for i in range(training_iter):
 
             # perform step and update curvature
-            options = {'closure': closure, 'current_loss': loss, 'max_ls': 10}
-            loss, _, lr, _, F_eval, G_eval, _, _ = optimizer.step(options)
+            # optimizer.zero_grad()
+            options = {'closure': closure, 'current_loss': loss, 'max_ls': 20, 'eta': 2}
+            loss, g_new, lr, _, F_eval, G_eval, desc_dir, fail = optimizer.step(options)
             if self.verbose:
                 logger.info(
-                    'Iter %d/%d - Loss: %.3f - LR: %.3f - Func Evals: %0.0f - Grad Evals: %0.0f' % (
-                        i + 1, training_iter, loss.item(), lr, F_eval, G_eval,
+                    'Iter %d/%d - Loss: %.3f - LR: %.3f - Func Evals: %0.0f - Grad Evals: %0.0f - fail: %0.0f' % (
+                        i + 1, training_iter, loss.item(), lr, F_eval, G_eval, fail
                     ))
+                # logger.info(str(g_new))
+            if torch.isnan(para_to_check.raw_lengthscale.data):
+                # logger.warning('NaN detected')
+                # self.covar_module.initialize(raw_lengthscale=1E-6)
+                para_to_check.initialize(raw_lengthscale=1E-6)
 
-    def train_gp_model_std(self, train_x, train_y):
+    def train_gp_model_2(self, train_x, train_y):
+        # Find optimal model hyperparameters
+        self.train()
+        self.likelihood.train()
+
         # Use the adam optimizer
-        optimizer = torch.optim.Adagrad([
+        optimizer = torch.optim.Adam([
             {'params': self.parameters()},  # Includes GaussianLikelihood parameters
-        ], lr=0.2)
+        ], lr=0.0001)
 
         # "Loss" for GPs - the marginal log likelihood
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self)
 
         n_iter = 50
         for i in range(n_iter):
-            optimizer.zero_grad()
-            output = self(train_x)
+            # optimizer.zero_grad()
+            output = self(train_x.double())
             # loss = -mll(output, train_y)
             loss = -mll(output, train_y).sum()
             loss.backward()
-            if self.verbose:
-                logger.info('Iter %d - Loss: %.3f' % (i + 1, loss.item()))
-            # print('Iter %d/%d - Loss: %.3f' % (i + 1, n_iter, loss.item()))
+            print('Iter %d/%d - Loss: %.3f' % (i + 1, n_iter, loss.item()))
             optimizer.step()
 
     def train_gp_model_test(self, train_x, train_y):
