@@ -55,14 +55,11 @@ class BayesianCommiteeMaschine:
 
             # Shape will be [n_data, n_dim, 1]
             proto = np.array([
-                [dim[i_cluster][i_index] for i_index in rand_index[i_cluster]]
+                dim[i_cluster][rand_index[i_cluster]]
                 for i_cluster in range(self.n_cluster)
             ])
 
-            if len(proto.shape) > 2:
-                final = np.squeeze(proto, 2)
-            else:
-                final = proto
+            final = np.concatenate(proto)
 
             return final
 
@@ -81,15 +78,15 @@ class BayesianCommiteeMaschine:
         self.y_train = generate_correct_format_train_data(type_var='output')
 
         n_data = [len(i_data) for i_data in self.x_train]
-        n_center_points_each_cluster = int(math.ceil(min(n_data) / 10))
+        n_center_points_each_cluster = int(math.ceil(min(n_data) / self.n_cluster))
         rand_index = [
             np.random.random_integers(0, i_data_points - 1, n_center_points_each_cluster) for i_data_points in n_data
         ]
 
-        # self.x_center = define_center_points(type_var='input')
-        self.x_center = self.x_train[0::3][0]
-        # self.y_center = define_center_points(type_var='output')
-        self.y_center = self.y_train[0::3][0]
+        self.x_center = define_center_points(type_var='input')
+        # self.x_center = self.x_train[0::3][0]
+        self.y_center = define_center_points(type_var='output')
+        # self.y_center = self.y_train[0::3][0]
 
         # print('stop')
 
@@ -99,12 +96,12 @@ class BayesianCommiteeMaschine:
         self.gp_clusters = [GPR_Script.GPR_Class()] * self.n_cluster
 
         # Train cluster (experts)
-        [
+        for i_cluster in range(self.n_cluster):
+            self.gp_clusters[i_cluster] = GPR_Script.GPR_Class()
             self.gp_clusters[i_cluster].create_GPR_model(
                 np.concatenate((self.x_train[i_cluster], self.x_center)),
                 np.concatenate((self.y_train[i_cluster], self.y_center)))
-            for i_cluster in range(self.n_cluster)
-        ]
+
         self.gp_center.create_GPR_model(self.x_center, self.y_center)
         print('stop')
 
