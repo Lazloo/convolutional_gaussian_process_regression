@@ -23,16 +23,22 @@ class BayesianCommiteeMaschine:
     def generate_cluster(self, x: np.ndarray, y: np.ndarray, n_cluster: int = 2):
         def generate_correct_format_train_data(type_var: str = 'input'):
             if type_var == 'input':
-                index = 0
+                var = x
             elif type_var == 'output':
-                index = 1
+                var = y
             else:
-                index = None
+                var = None
                 AssertionError('Unknown type_var: ' + str(type_var))
 
             proto = [
-                # np.expand_dims(
-                np.array([i_data[index] for i_data in cluster_list[i_cluster]])
+                # np.squeeze(
+                    np.array(
+                        [var[i] for i in range(n_data_points)
+                         if self.cluster_label[i] == i_cluster]
+                    )
+                #     , axis=1
+                # )
+
                 for i_cluster in range(n_cluster)
             ]
 
@@ -69,11 +75,19 @@ class BayesianCommiteeMaschine:
         self.n_cluster = n_cluster
 
         self.cluster_label = KMeans(n_clusters=n_cluster, random_state=0).fit(x).labels_
-        cluster_list = [
-            np.concatenate([(x[i, :], y[i]) for i in range(n_data_points) if self.cluster_label[i] == i_cluster],
-                           axis=1).transpose()
-            for i_cluster in range(n_cluster)
-        ]
+        # np.expand_dims(x[0],axis=0)
+        # cluster_list_x = [
+        #     # np.concatenate([(x[i], y[i]) for i in range(n_data_points)
+        #     # np.concatenate([(np.expand_dims(x[i], axis=0), np.expand_dims(y[i], axis=0)) for i in range(n_data_points)
+        #     #                 if self.cluster_label[i] == i_cluster],
+        #     #                axis=1).transpose()
+        #     np.concatenate([(np.expand_dims(x[i], axis=0)) for i in range(n_data_points)
+        #                     if self.cluster_label[i] == i_cluster],
+        #                    axis=1).transpose()
+        #
+        #     for i_cluster in range(n_cluster)
+        # ]
+
         self.x_train = generate_correct_format_train_data(type_var='input')
         self.y_train = generate_correct_format_train_data(type_var='output')
 
